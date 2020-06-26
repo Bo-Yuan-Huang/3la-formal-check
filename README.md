@@ -1,10 +1,4 @@
-# ILA project template
+# 3LA Formal Check
 
-To initialize the project with your customized name, run:
+Formal verification of 3LA program fragments.
 
-```bash
-python3 script/init.py <project_name>
-```
-
-This will generate the template ILA project. 
-The directory `template` can be removed afterward.
