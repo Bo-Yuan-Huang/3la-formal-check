@@ -24,28 +24,30 @@
 
 // File: main.cc
 
-#include <ilang/util/log.h>
+#include <ilang/ilang++.h>
 
-#include <flex/interface.h>
-#include <relay/interface.h>
-
-#include <pffc/ischecker.h>
+#include <pffc/ischecker_flex_relay.h>
 
 using namespace ilang;
 
 int main() {
+  EnableDebug("3LA");
 
   auto data_dir = fs::current_path() / ".." / "data";
 
-  auto flex_ila = flex::GetFlexIla("flex");
-  auto relay_ila = relay::GetRelayIla("relay");
+  auto checker = IsCheckerFlexRelay();
 
-  auto checker = IsChecker(flex_ila, relay_ila);
+  // instruction sequence to verify
   checker.SetInstrSeq(0, data_dir / "instr_seq_flex_small.json");
   checker.SetInstrSeq(1, data_dir / "instr_seq_relay_small.json");
 
-  auto res = checker.Check();
-  ILA_INFO << "Result: " << res;
+  // design specific
+  checker.SetFlexCmd(data_dir / "prog_frag_flex.json");
+  checker.SetRelayCmd(data_dir / "prog_frag_relay.json");
+  checker.SetAddrMapping(data_dir / "addr_mapping.json");
+
+  // verify
+  checker.Check();
 
   return 0;
 }

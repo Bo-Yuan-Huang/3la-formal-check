@@ -51,7 +51,7 @@ public:
   // specify the instruction sequence (file) of m0/m1
   void SetInstrSeq(const int& idx, const fs::path& file);
 
-private:
+protected:
   // underlying z3 context
   z3::context ctx_;
 
@@ -60,17 +60,26 @@ private:
   Ila m1_;
 
   // instruction sequence
-  std::vector<InstrRef> m0_instr_seq_;
-  std::vector<InstrRef> m1_instr_seq_;
+  std::vector<InstrRef> instr_seq_m0_;
+  std::vector<InstrRef> instr_seq_m1_;
 
-  std::set<std::string> m0_top_instr_;
-  std::set<std::string> m1_top_instr_;
+  // design info - top-level instructions
+  std::set<std::string> top_instr_m0_;
+  std::set<std::string> top_instr_m1_;
 
   // instruction sequence unroller (for z3)
-  IlaZ3Unroller* unroller_ = NULL;
+  IlaZ3Unroller* unroller_m0_ = NULL;
+  IlaZ3Unroller* unroller_m1_ = NULL;
 
   // preprocessing before checking, e.g., flattening hierarchy
   void Preprocess();
+
+  // design specific
+  virtual void AddEnvM0() {}
+  virtual void AddEnvM1() {}
+  virtual z3::expr GetMiter() = 0;
+  virtual z3::expr GetUninterpFunc() = 0;
+  virtual void Debug(z3::model& model) {}
 
   // helper - read instruction sequence from file
   static void ReadInstrSeq(const Ila& m, const fs::path& file,

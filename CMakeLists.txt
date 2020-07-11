@@ -78,13 +78,15 @@ FetchContent_Declare(
 ##
 ## csv
 ##
+#[[
 FetchContent_Declare(
   csv
   GIT_REPOSITORY https://github.com/vincentlaucsb/csv-parser.git
   GIT_TAG        1.3.3
 )
+]]
 
-FetchContent_MakeAvailable(flex relay fmt csv)
+FetchContent_MakeAvailable(flex relay fmt)
 
 # ---------------------------------------------------------------------------- #
 # TARGET
@@ -93,14 +95,17 @@ FetchContent_MakeAvailable(flex relay fmt csv)
 add_executable(${MyTarget} 
   app/main.cc
   src/ischecker.cc
+  src/ischecker_flex.cc
+  src/ischecker_miter.cc
+  src/ischecker_relay.cc
 )
 
 target_include_directories(${MyTarget} PRIVATE include)
-target_include_directories(${MyTarget} PRIVATE ${csv_SOURCE_DIR}/include)
+# target_include_directories(${MyTarget} PRIVATE ${csv_SOURCE_DIR}/include)
 
 target_link_libraries(${MyTarget} PRIVATE ilang::ilang)
 target_link_libraries(${MyTarget} PRIVATE fmt::fmt)
-target_link_libraries(${MyTarget} PRIVATE csv)
+# target_link_libraries(${MyTarget} PRIVATE csv)
 
 target_link_libraries(${MyTarget} PRIVATE flex::flexila)
 target_link_libraries(${MyTarget} PRIVATE relay::relayila)

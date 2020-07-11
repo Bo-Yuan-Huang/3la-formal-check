@@ -1,0 +1,39 @@
+{
+    "command inputs": [
+        {
+            "_instr_No.": 0,
+            "addr": "0x33800010",
+            "data": "0x2000000020001000000000001",
+            "is_rd": "0",
+            "is_wr": "1"
+        },
+        {
+            "_instr_No.": 1,
+            "addr": "0x33400010",
+            "data": "0x10",
+            "is_rd": "0",
+            "is_wr": "1"
+        },
+        {
+            "_instr_No.": 2,
+            "addr": "0x33500000",
+            "data": "0x3C5ACB7A2CC234751CA3281B0231DB4",
+            "is_rd": "0",
+            "is_wr": "1"
+        },
+        {
+            "_instr_No.": 3,
+            "addr": "0x33500010",
+            "data": "0x24D3B0D1B2CB33505FC4178149004ACB",
+            "is_rd": "0",
+            "is_wr": "1"
+        },
+        {
+            "_instr_No.": 4,
+            "addr": "0x33000020",
+            "data": "0x0",
+            "is_rd": "0",
+            "is_wr": "1"
+        }
+    ]
+}
