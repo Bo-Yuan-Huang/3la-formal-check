@@ -61,6 +61,14 @@ bool IsChecker::Check() {
     return false;
   }
 
+  // optimize
+#if 0
+  std::vector<Ila::PassID> pass = {Ila::PassID::SIMPLIFY_SYNTACTIC,
+                                   Ila::PassID::REWRITE_CONDITIONAL_STORE};
+  m0_.ExecutePass(pass);
+  m1_.ExecutePass(pass);
+#endif
+
   // unroll the program and get the z3 expression
   ILA_NOT_NULL(unroller_m0_);
   ILA_NOT_NULL(unroller_m1_);
