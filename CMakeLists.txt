@@ -38,6 +38,8 @@ set(MyTarget ${PROJECT_NAME})
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
+option(USE_Z3 "Use Z3 for SMT queries" ON)
+
 # ---------------------------------------------------------------------------- #
 # External dependencies
 # ---------------------------------------------------------------------------- #
@@ -46,7 +48,7 @@ include(FetchContent)
 ##
 ## ilang
 ##
-find_package(ilang REQUIRED 1.0.6)
+find_package(ilang REQUIRED 1.1.3)
 
 ##
 ## flex::flexila
@@ -102,6 +104,10 @@ add_executable(${MyTarget}
 
 target_include_directories(${MyTarget} PRIVATE include)
 # target_include_directories(${MyTarget} PRIVATE ${csv_SOURCE_DIR}/include)
+
+if(${USE_Z3})
+  target_compile_definitions(${MyTarget} PRIVATE USE_Z3)
+endif()
 
 target_link_libraries(${MyTarget} PRIVATE ilang::ilang)
 target_link_libraries(${MyTarget} PRIVATE fmt::fmt)

@@ -27,9 +27,17 @@
 #include <fstream>
 
 #include <fmt/format.h>
+#include <ilang/target-smt/smt_switch_itf.h>
+#include <ilang/target-smt/z3_expr_adapter.h>
 #include <ilang/util/log.h>
 #include <ilang/util/str_util.h>
 #include <nlohmann/json.hpp>
+
+#ifdef USE_Z3
+#include <z3++.h>
+#else
+#include <smt-switch/smt.h>
+#endif
 
 #include <flex/gb_core.h>
 #include <flex/top_config.h>
@@ -45,7 +53,14 @@ using json = nlohmann::json;
 
 namespace ilang {
 
-void IsCheckerFlexRelay::SetAddrMapping(const fs::path& mapping) {
+#ifdef USE_Z3
+template class IsCheckerFlexRelay<Z3ExprAdapter>;
+#else
+template class IsCheckerFlexRelay<SmtSwitchItf>;
+#endif
+
+template <class Generator>
+void IsCheckerFlexRelay<Generator>::SetAddrMapping(const fs::path& mapping) {
   json mapping_reader;
 
   std::ifstream fin(mapping);
@@ -63,16 +78,25 @@ void IsCheckerFlexRelay::SetAddrMapping(const fs::path& mapping) {
   }
 }
 
-z3::expr IsCheckerFlexRelay::GetMiter() {
+template <class Generator>
+typename IsChecker<Generator>::SmtExpr
+IsCheckerFlexRelay<Generator>::GetMiter() {
   ILA_INFO << "Setting memory relation (miter)";
 
-  auto flex_mem = m0_.state(GB_CORE_LARGE_BUFFER);
-  auto relay_mem = m1_.state(RELAY_TENSOR_MEM);
+  auto& m0 = this->m0_;
+  auto& m1 = this->m1_;
+  auto& unroller_m0 = this->unroller_m0_;
+  auto& unroller_m1 = this->unroller_m1_;
+  auto& instr_seq_m0 = this->instr_seq_m0_;
+  auto& instr_seq_m1 = this->instr_seq_m1_;
+
+  auto flex_mem = m0.state(GB_CORE_LARGE_BUFFER);
+  auto relay_mem = m1.state(RELAY_TENSOR_MEM);
 
   // start
-  auto flex_start = unroller_m0_->CurrState(flex_mem, 0);
-  auto relay_start = unroller_m1_->CurrState(relay_mem, 0);
-  auto same_start = (flex_start == relay_start);
+  auto flex_start = unroller_m0->GetSmtCurrent(flex_mem.get(), 0);
+  auto relay_start = unroller_m1->GetSmtCurrent(relay_mem.get(), 0);
+  auto same_start = this->smt_gen_.Equal(flex_start, relay_start);
   ILA_DLOG("3LA") << fmt::format("{} @ 0 == {} @ 0", flex_mem.name(),
                                  relay_mem.name());
 
@@ -81,22 +105,26 @@ z3::expr IsCheckerFlexRelay::GetMiter() {
   ILA_ASSERT(!store_relay_.empty());
   ILA_ASSERT(store_flex_.size() * 16 == store_relay_.size());
 
-  auto relay_in_data = m1_.input(RELAY_DATA_IN);
-  auto same_store = ctx_.bool_val(true);
+  auto relay_in_data = m1.input(RELAY_DATA_IN);
+  auto same_store = this->smt_gen_.GetShimExpr(BoolConst(true).get());
 
   for (auto flex_iter : store_flex_) {
     auto flex_addr = flex_iter.first;
     auto flex_step = flex_iter.second;
 
     for (auto i = 0; i < 16; i++) {
-      auto flex_in_data = m0_.input(k_flex_in_data.at(i));
-      auto flex_data = unroller_m0_->CurrState(flex_in_data, flex_step);
+      auto flex_in_data = m0.input(k_flex_in_data.at(i));
+      auto flex_data =
+          unroller_m0->GetSmtCurrent(flex_in_data.get(), flex_step);
 
       auto relay_addr = addr_mapping_.at(flex_addr + i);
       auto relay_step = store_relay_.at(relay_addr);
-      auto relay_data = unroller_m1_->CurrState(relay_in_data, relay_step);
+      auto relay_data =
+          unroller_m1->GetSmtCurrent(relay_in_data.get(), relay_step);
 
-      same_store = (same_store && (flex_data == relay_data));
+      same_store = this->smt_gen_.BoolAnd(
+          same_store, this->smt_gen_.Equal(flex_data, relay_data));
+
       ILA_DLOG("3LA") << fmt::format("{} @ {} == {} @ {}", flex_in_data.name(),
                                      flex_step, relay_in_data.name(),
                                      relay_step);
@@ -104,59 +132,137 @@ z3::expr IsCheckerFlexRelay::GetMiter() {
   }
 
   // end
-  auto same_end = ctx_.bool_val(true);
+  auto same_end = this->smt_gen_.GetShimExpr(BoolConst(true).get());
 
   for (auto flex_iter : store_flex_) {
     auto flex_addr = flex_iter.first;
     auto flex_data = Load(flex_mem, flex_addr);
-    auto end_f = unroller_m0_->GetZ3Expr(flex_data, instr_seq_m0_.size());
+    auto end_f =
+        unroller_m0->GetSmtCurrent(flex_data.get(), instr_seq_m0.size());
 
     for (auto i = 0; i < 16; i++) {
       auto relay_addr = addr_mapping_.at(flex_addr + i);
       auto relay_data = Load(relay_mem, relay_addr);
-      auto end_r = unroller_m1_->GetZ3Expr(relay_data, instr_seq_m1_.size());
+      auto end_r =
+          unroller_m1->GetSmtCurrent(relay_data.get(), instr_seq_m1.size());
 
-      same_end = (same_end && (end_f == end_r));
+      same_end =
+          this->smt_gen_.BoolAnd(same_end, this->smt_gen_.Equal(end_f, end_r));
     }
   }
 
+#ifdef USE_Z3
+
   return same_start && same_store && !same_end;
+
+#else
+
+  auto& smt_solver = this->smt_gen_.get().solver();
+#if 0 // sanity check - should be sat
+  return smt_solver->make_term(
+      smt::PrimOp::And, same_start,
+      smt_solver->make_term(smt::PrimOp::And, same_store, same_end));
+#else
+  return smt_solver->make_term(
+      smt::PrimOp::And, same_start,
+      smt_solver->make_term(smt::PrimOp::And, same_store,
+                            smt_solver->make_term(smt::PrimOp::Not, same_end)));
+#endif
+
+#endif
 }
 
-z3::expr IsCheckerFlexRelay::GetUninterpFunc() {
-  auto interp = ctx_.bool_val(true);
+template <class Generator>
+typename IsChecker<Generator>::SmtExpr
+IsCheckerFlexRelay<Generator>::GetUninterpFunc() {
+  auto& unroller_m0 = this->unroller_m0_;
+  auto& unroller_m1 = this->unroller_m1_;
 
-  auto flex_func_max = unroller_m0_->GetZ3FuncDecl(flex::GBAdpfloat_max);
-  auto relay_func_max = unroller_m1_->GetZ3FuncDecl(relay::adpfloat_max);
+  auto interp = this->smt_gen_.GetShimExpr(BoolConst(true).get());
 
-  auto a = ctx_.bv_const("a", TOP_DATA_IN_WIDTH);
-  auto b = ctx_.bv_const("b", TOP_DATA_IN_WIDTH);
+  auto flex_func_max = unroller_m0->GetSmtFuncDecl(flex::GBAdpfloat_max.get());
+  auto relay_func_max = unroller_m1->GetSmtFuncDecl(relay::adpfloat_max.get());
 
-#if 1
+#ifdef USE_Z3
+  auto& ctx = this->smt_gen_.get().context();
+  auto a = ctx.bv_const("a", TOP_DATA_IN_WIDTH);
+  auto b = ctx.bv_const("b", TOP_DATA_IN_WIDTH);
+
   interp = interp && //
            z3::forall(a, b, flex_func_max(a, b) == relay_func_max(a, b)) &&
            z3::forall(a, b, flex_func_max(a, b) == relay_func_max(b, a)) &&
            z3::forall(a, b,
                       (flex_func_max(a, b) == a) || (flex_func_max(a, b) == b));
+
+#else // not USE_Z3
+  auto& solver = this->smt_gen_.get().solver();
+
+  int uninterp_var_cnt = 0;
+  auto _new_var = [&uninterp_var_cnt]() {
+    return fmt::format("uninterp_var_{}", uninterp_var_cnt++);
+  };
+
+  auto _forallab = [&solver, &_new_var](auto& p) {
+    auto bvsort = solver->make_sort(smt::BV, TOP_DATA_IN_WIDTH);
+    auto a = solver->make_param(_new_var(), bvsort);
+    auto b = solver->make_param(_new_var(), bvsort);
+    auto forallb = solver->make_term(smt::PrimOp::Forall, b, p(a, b));
+    return solver->make_term(smt::PrimOp::Forall, a, forallb);
+  };
+
+  auto fabeqrab = [&solver, &flex_func_max, &relay_func_max](auto& a, auto& b) {
+    auto fab = solver->make_term(smt::PrimOp::Apply, flex_func_max, a, b);
+    auto rab = solver->make_term(smt::PrimOp::Apply, relay_func_max, a, b);
+    return solver->make_term(smt::PrimOp::Equal, fab, rab);
+  };
+
+  auto fabeqrba = [&solver, &flex_func_max, &relay_func_max](auto& a, auto& b) {
+    auto fab = solver->make_term(smt::PrimOp::Apply, flex_func_max, a, b);
+    auto rba = solver->make_term(smt::PrimOp::Apply, relay_func_max, b, a);
+    return solver->make_term(smt::PrimOp::Equal, fab, rba);
+  };
+
+  auto withinab = [&solver, &flex_func_max](auto& a, auto& b) {
+    auto fab = solver->make_term(smt::PrimOp::Apply, flex_func_max, a, b);
+    return solver->make_term(smt::PrimOp::Or,
+                             solver->make_term(smt::PrimOp::Equal, fab, a),
+                             solver->make_term(smt::PrimOp::Equal, fab, b));
+  };
+
+#if 1
+  interp = solver->make_term(smt::PrimOp::Equal, flex_func_max, relay_func_max);
 #else
-  interp = interp &&
-           z3::forall(a, b, flex_func_max(a, b) == z3::ite(a >= b, a, b)) &&
-           z3::forall(a, b, relay_func_max(a, b) == z3::ite(a >= b, a, b));
+  interp = solver->make_term(smt::PrimOp::And, interp, _forallab(fabeqrab));
+  interp = solver->make_term(smt::PrimOp::And, interp, _forallab(fabeqrba));
+  interp = solver->make_term(smt::PrimOp::And, interp, _forallab(withinab));
+#endif
+
 #endif
 
   return interp;
 }
 
-void IsCheckerFlexRelay::Debug(z3::model& model) {
-  auto flex_mem = m0_.state(GB_CORE_LARGE_BUFFER);
-  auto relay_mem = m1_.state(RELAY_TENSOR_MEM);
-  auto flex_end = unroller_m0_->CurrState(flex_mem, instr_seq_m0_.size());
-  auto relay_end = unroller_m1_->CurrState(relay_mem, instr_seq_m1_.size());
+#ifdef USE_Z3
+template <class Generator>
+void IsCheckerFlexRelay<Generator>::Debug(z3::model& model) {
+  auto& m0 = this->m0_;
+  auto& m1 = this->m1_;
+  auto& unroller_m0 = this->unroller_m0_;
+  auto& unroller_m1 = this->unroller_m1_;
+  auto& instr_seq_m0 = this->instr_seq_m0_;
+  auto& instr_seq_m1 = this->instr_seq_m1_;
+
+  auto flex_mem = m0.state(GB_CORE_LARGE_BUFFER);
+  auto relay_mem = m1.state(RELAY_TENSOR_MEM);
+  auto flex_end =
+      unroller_m0->GetSmtCurrent(flex_mem.get(), instr_seq_m0.size());
+  auto relay_end =
+      unroller_m1->GetSmtCurrent(relay_mem.get(), instr_seq_m1.size());
 
   //
   std::ofstream flex_out("flex_out.txt");
-  for (auto i = 0; i <= instr_seq_m0_.size(); i++) {
-    auto flex_i = unroller_m0_->GetZ3Expr(Load(flex_mem, 0), i);
+  for (auto i = 0; i <= instr_seq_m0.size(); i++) {
+    auto flex_i = unroller_m0->GetSmtCurrent(Load(flex_mem, 0).get(), i);
     flex_out << i << ": " << model.eval(flex_i) << "\n";
   }
   flex_out << "complete mem:\n";
@@ -165,8 +271,8 @@ void IsCheckerFlexRelay::Debug(z3::model& model) {
 
   //
   std::ofstream relay_out("relay_out.txt");
-  for (auto i = 0; i <= instr_seq_m1_.size(); i++) {
-    auto relay_i = unroller_m1_->GetZ3Expr(Load(relay_mem, 0), i);
+  for (auto i = 0; i <= instr_seq_m1.size(); i++) {
+    auto relay_i = unroller_m1->GetSmtCurrent(Load(relay_mem, 0).get(), i);
     relay_out << i << ": " << model.eval(relay_i) << "\n";
   }
 
@@ -174,5 +280,6 @@ void IsCheckerFlexRelay::Debug(z3::model& model) {
   relay_out << model.eval(relay_end);
   relay_out.close();
 }
+#endif
 
 } // namespace ilang

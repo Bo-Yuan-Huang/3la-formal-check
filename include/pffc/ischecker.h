@@ -32,17 +32,18 @@
 #include <string>
 #include <vector>
 
+#include <ilang/ila-mngr/u_unroller_smt.h>
 #include <ilang/ilang++.h>
-#include <z3++.h>
+#include <ilang/target-smt/smt_shim.h>
 
 namespace fs = std::filesystem;
 
 namespace ilang {
 
-class IsChecker {
+template <class Generator> class IsChecker {
 public:
   // constructor and destructor
-  IsChecker(const Ila& m0, const Ila& m1);
+  IsChecker(const Ila& m0, const Ila& m1, SmtShim<Generator>& smt_gen);
   ~IsChecker();
 
   // start checking
@@ -52,8 +53,8 @@ public:
   void SetInstrSeq(const int& idx, const fs::path& file);
 
 protected:
-  // underlying z3 context
-  z3::context ctx_;
+  // SMT generator smt_gen_;
+  SmtShim<Generator>& smt_gen_;
 
   // ILA model to check
   Ila m0_;
@@ -68,18 +69,23 @@ protected:
   std::set<std::string> top_instr_m1_;
 
   // instruction sequence unroller (for z3)
-  IlaZ3Unroller* unroller_m0_ = NULL;
-  IlaZ3Unroller* unroller_m1_ = NULL;
+  PathUnroller<Generator>* unroller_m0_ = nullptr;
+  PathUnroller<Generator>* unroller_m1_ = nullptr;
 
   // preprocessing before checking, e.g., flattening hierarchy
   void Preprocess();
 
+  typedef decltype(smt_gen_.GetShimExpr(nullptr, "")) SmtExpr;
+  // typedef decltype(smt_gen_.GetShimFunc(nullptr)) SmtFunc;
+
   // design specific
   virtual void AddEnvM0() {}
   virtual void AddEnvM1() {}
-  virtual z3::expr GetMiter() = 0;
-  virtual z3::expr GetUninterpFunc() = 0;
+  virtual SmtExpr GetMiter() = 0;
+  virtual SmtExpr GetUninterpFunc() = 0;
+#ifdef USE_Z3
   virtual void Debug(z3::model& model) {}
+#endif
 
   // helper - read instruction sequence from file
   static void ReadInstrSeq(const Ila& m, const fs::path& file,

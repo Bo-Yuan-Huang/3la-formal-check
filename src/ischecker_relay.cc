@@ -27,6 +27,9 @@
 #include <fstream>
 #include <set>
 
+//#include <csv.hpp>
+#include <ilang/target-smt/smt_switch_itf.h>
+#include <ilang/target-smt/z3_expr_adapter.h>
 #include <ilang/util/log.h>
 #include <ilang/util/str_util.h>
 #include <nlohmann/json.hpp>
@@ -40,7 +43,14 @@ using json = nlohmann::json;
 
 namespace ilang {
 
-void IsCheckerFlexRelay::SetRelayCmd(const fs::path& cmd_file) {
+#ifdef USE_Z3
+template class IsCheckerFlexRelay<Z3ExprAdapter>;
+#else
+template class IsCheckerFlexRelay<SmtSwitchItf>;
+#endif
+
+template <class Generator>
+void IsCheckerFlexRelay<Generator>::SetRelayCmd(const fs::path& cmd_file) {
   ILA_ASSERT(fs::is_regular_file(cmd_file)) << cmd_file;
   ILA_WARN_IF(!cmd_seq_relay_.empty()) << "Relay command not empty";
 
@@ -69,52 +79,60 @@ void IsCheckerFlexRelay::SetRelayCmd(const fs::path& cmd_file) {
   }
 }
 
-void IsCheckerFlexRelay::AddEnvM1() {
+template <class Generator> void IsCheckerFlexRelay<Generator>::AddEnvM1() {
+  auto& instr_seq_m1 = this->instr_seq_m1_;
+  auto& top_instr_m1 = this->top_instr_m1_;
+  auto& unroller_m1 = this->unroller_m1_;
+
   ILA_INFO << "Adding relay specific constraints";
   ILA_ASSERT(!cmd_seq_relay_.empty()) << "No Relay command provided";
-  ILA_ASSERT(instr_seq_m1_.size() >= cmd_seq_relay_.size());
+  ILA_ASSERT(instr_seq_m1.size() >= cmd_seq_relay_.size());
 
   // constraint input of top-level instr
-  for (auto i = 0, j = 0; i < instr_seq_m1_.size(); i++) {
-    auto instr = instr_seq_m1_.at(i);
+  for (auto i = 0, j = 0; i < instr_seq_m1.size(); i++) {
+    auto instr = instr_seq_m1.at(i);
 
     // only apply to top-level instr
-    if (top_instr_m1_.find(instr.name()) == top_instr_m1_.end()) {
+    if (top_instr_m1.find(instr.name()) == top_instr_m1.end()) {
       continue;
     }
 
     // only constrain on non-data parts
     auto data_free_cmd = FilterRelayCmd(instr.name(), j);
-    unroller_m1_->AddStepPred(i, data_free_cmd);
+    unroller_m1->AssertStep(data_free_cmd.get(), i);
 
     // increment cmd ptr
     j++;
   }
 }
 
-ExprRef IsCheckerFlexRelay::FilterRelayCmd(const std::string& instr_name,
-                                           size_t cmd_idx) {
+template <class Generator>
+ExprRef
+IsCheckerFlexRelay<Generator>::FilterRelayCmd(const std::string& instr_name,
+                                              size_t cmd_idx) {
+  auto& m1 = this->m1_;
+
   auto& cmd = cmd_seq_relay_[cmd_idx];
   auto func_id = cmd.at("func_id");
   auto func_run = cmd.at("func_run");
 
   // func_run & func_id
-  auto cmd_expr = (m1_.input(RELAY_FUNC_RUN_IN) == func_run) &
-                  (m1_.input(RELAY_FUNC_ID_IN) == func_id);
+  auto cmd_expr = (m1.input(RELAY_FUNC_RUN_IN) == func_run) &
+                  (m1.input(RELAY_FUNC_ID_IN) == func_id);
 
   if (func_id == F_TENSOR_STORE_ID) {
     auto addr = cmd.at("data_in_y");
-    cmd_expr = cmd_expr & (m1_.input(DATA_IN_Y) == cmd.at("data_in_y"));
+    cmd_expr = cmd_expr & (m1.input(DATA_IN_Y) == cmd.at("data_in_y"));
     store_relay_.insert({addr, cmd_idx});
 
   } else if (func_id == F_MAXPOOLING_2D_ID) {
-    cmd_expr = cmd_expr & (m1_.input(RELAY_DATA_IN) == cmd.at("data_in"));
-    cmd_expr = cmd_expr & (m1_.input(DATA_IN_Y) == cmd.at("data_in_y"));
-    cmd_expr = cmd_expr & (m1_.input(DATA_IN_X) == cmd.at("data_in_x"));
-    cmd_expr = cmd_expr & (m1_.input(POOL_SIZE_Y_IN) == cmd.at("pool_size_y"));
-    cmd_expr = cmd_expr & (m1_.input(POOL_SIZE_X_IN) == cmd.at("pool_size_x"));
-    cmd_expr = cmd_expr & (m1_.input(STRIDES_Y_IN) == cmd.at("stride_y"));
-    cmd_expr = cmd_expr & (m1_.input(STRIDES_X_IN) == cmd.at("stride_x"));
+    cmd_expr = cmd_expr & (m1.input(RELAY_DATA_IN) == cmd.at("data_in"));
+    cmd_expr = cmd_expr & (m1.input(DATA_IN_Y) == cmd.at("data_in_y"));
+    cmd_expr = cmd_expr & (m1.input(DATA_IN_X) == cmd.at("data_in_x"));
+    cmd_expr = cmd_expr & (m1.input(POOL_SIZE_Y_IN) == cmd.at("pool_size_y"));
+    cmd_expr = cmd_expr & (m1.input(POOL_SIZE_X_IN) == cmd.at("pool_size_x"));
+    cmd_expr = cmd_expr & (m1.input(STRIDES_Y_IN) == cmd.at("stride_y"));
+    cmd_expr = cmd_expr & (m1.input(STRIDES_X_IN) == cmd.at("stride_x"));
 
   } else if (func_id == F_LSTM_ID) {
     // TODO

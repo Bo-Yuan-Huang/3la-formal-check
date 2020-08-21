@@ -27,6 +27,8 @@
 #include <fstream>
 
 #include <ilang/ila/instr_lvl_abs.h>
+#include <ilang/target-smt/smt_switch_itf.h>
+#include <ilang/target-smt/z3_expr_adapter.h>
 #include <ilang/util/log.h>
 #include <nlohmann/json.hpp>
 
@@ -36,25 +38,34 @@ using json = nlohmann::json;
 
 namespace ilang {
 
-IsChecker::IsChecker(const Ila& m0, const Ila& m1) : m0_(m0), m1_(m1) {
-  unroller_m0_ = new IlaZ3Unroller(ctx_);
-  unroller_m1_ = new IlaZ3Unroller(ctx_);
+#ifdef USE_Z3
+template class IsChecker<Z3ExprAdapter>;
+#else
+template class IsChecker<SmtSwitchItf>;
+#endif
+
+template <class Generator>
+IsChecker<Generator>::IsChecker(const Ila& m0, const Ila& m1,
+                                SmtShim<Generator>& smt_gen)
+    : m0_(m0), m1_(m1), smt_gen_(smt_gen) {
+  unroller_m0_ = new PathUnroller<Generator>(smt_gen_);
+  unroller_m1_ = new PathUnroller<Generator>(smt_gen_);
   Preprocess();
 }
 
-IsChecker::~IsChecker() {
+template <class Generator> IsChecker<Generator>::~IsChecker() {
   if (unroller_m0_) {
     delete unroller_m0_;
-    unroller_m0_ = NULL;
+    unroller_m0_ = nullptr;
   }
 
   if (unroller_m1_) {
     delete unroller_m1_;
-    unroller_m1_ = NULL;
+    unroller_m1_ = nullptr;
   }
 }
 
-bool IsChecker::Check() {
+template <class Generator> bool IsChecker<Generator>::Check() {
   // make sure the sequence has been specified
   if (instr_seq_m0_.empty() or instr_seq_m1_.empty()) {
     ILA_ERROR << "Instruction sequence not set";
@@ -69,7 +80,7 @@ bool IsChecker::Check() {
   m1_.ExecutePass(pass);
 #endif
 
-  // unroll the program and get the z3 expression
+  // unroll the program and get the smt expression
   ILA_NOT_NULL(unroller_m0_);
   ILA_NOT_NULL(unroller_m1_);
 
@@ -78,13 +89,16 @@ bool IsChecker::Check() {
   AddEnvM1();
 
   // unroll two instruction sequences
-#if 0
-  auto is0 = unroller_m0_->UnrollPathConn(instr_seq_m0_);
-  auto is1 = unroller_m1_->UnrollPathConn(instr_seq_m1_);
-#else
-  auto is0 = unroller_m0_->UnrollPathSubs(instr_seq_m0_);
-  auto is1 = unroller_m1_->UnrollPathSubs(instr_seq_m1_);
-#endif
+  InstrVec instr_seq_m0;
+  InstrVec instr_seq_m1;
+  for (const auto& i : instr_seq_m0_) {
+    instr_seq_m0.push_back(i.get());
+  }
+  for (const auto& i : instr_seq_m1_) {
+    instr_seq_m1.push_back(i.get());
+  }
+  auto is0 = unroller_m0_->Unroll(instr_seq_m0);
+  auto is1 = unroller_m1_->Unroll(instr_seq_m1);
 
   // miter
   auto miter = GetMiter();
@@ -94,24 +108,39 @@ bool IsChecker::Check() {
 
   // start solving
   ILA_INFO << "Start solving";
-  z3::solver solver(ctx_);
+
+#ifdef USE_Z3
+  auto& ctx = smt_gen_.get().context();
+  z3::solver solver(ctx);
   solver.add(is0);
   solver.add(is1);
   solver.add(miter);
   solver.add(uninterp_func);
 
   auto res = solver.check();
-  ILA_INFO << "Result: " << res;
-
   if (res == z3::sat) {
     auto model = solver.get_model();
     Debug(model);
   }
-
+  ILA_INFO << "Result: " << res;
   return res == z3::unsat;
+
+#else // not USE_Z3
+  auto& solver = smt_gen_.get().solver();
+  solver->assert_formula(is0);
+  solver->assert_formula(is1);
+  solver->assert_formula(miter);
+  solver->assert_formula(uninterp_func);
+
+  auto res = solver->check_sat();
+  ILA_INFO << "Result: " << res;
+  return res.is_unsat();
+
+#endif
 }
 
-void IsChecker::SetInstrSeq(const int& idx, const fs::path& file) {
+template <class Generator>
+void IsChecker<Generator>::SetInstrSeq(const int& idx, const fs::path& file) {
   ILA_ASSERT(fs::is_regular_file(file)) << file;
   if (idx == 0) {
     ReadInstrSeq(m0_, file, instr_seq_m0_);
@@ -120,7 +149,7 @@ void IsChecker::SetInstrSeq(const int& idx, const fs::path& file) {
   }
 }
 
-void IsChecker::Preprocess() {
+template <class Generator> void IsChecker<Generator>::Preprocess() {
   // bookkeeping top-level instructions
   GetTopInstr(m0_, top_instr_m0_);
   GetTopInstr(m1_, top_instr_m1_);
@@ -130,8 +159,9 @@ void IsChecker::Preprocess() {
   m1_.FlattenHierarchy();
 }
 
-void IsChecker::ReadInstrSeq(const Ila& m, const fs::path& file,
-                             std::vector<InstrRef>& dst) {
+template <class Generator>
+void IsChecker<Generator>::ReadInstrSeq(const Ila& m, const fs::path& file,
+                                        std::vector<InstrRef>& dst) {
   if (file.extension() != ".json") {
     return;
   }
@@ -151,7 +181,9 @@ void IsChecker::ReadInstrSeq(const Ila& m, const fs::path& file,
   }
 }
 
-void IsChecker::GetTopInstr(const Ila& m, std::set<std::string>& dst) {
+template <class Generator>
+void IsChecker<Generator>::GetTopInstr(const Ila& m,
+                                       std::set<std::string>& dst) {
   ILA_WARN_IF(!dst.empty()) << "Getting top instr. into non-empty container";
   for (auto i = 0; i < m.instr_num(); i++) {
     dst.emplace(m.instr(i).name());

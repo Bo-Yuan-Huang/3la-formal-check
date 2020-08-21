@@ -25,6 +25,16 @@
 // File: main.cc
 
 #include <ilang/ilang++.h>
+#include <ilang/target-smt/smt_shim.h>
+#include <ilang/target-smt/smt_switch_itf.h>
+#include <ilang/target-smt/z3_expr_adapter.h>
+
+#ifdef USE_Z3
+#include <z3++.h>
+#else
+#include <smt-switch/boolector_factory.h>
+#include <smt-switch/smt.h>
+#endif
 
 #include <pffc/ischecker_flex_relay.h>
 
@@ -35,7 +45,16 @@ int main() {
 
   auto data_dir = fs::current_path() / ".." / "data";
 
-  auto checker = IsCheckerFlexRelay();
+#ifdef USE_Z3
+  z3::context ctx;
+  auto smt_generator = Z3ExprAdapter(ctx);
+#else
+  auto btor = smt::BoolectorSolverFactory::create(false);
+  auto smt_generator = SmtSwitchItf(btor);
+#endif
+
+  auto smt_shim = SmtShim(smt_generator);
+  auto checker = IsCheckerFlexRelay(smt_shim);
 
   // instruction sequence to verify
   checker.SetInstrSeq(0, data_dir / "instr_seq_flex_small.json");

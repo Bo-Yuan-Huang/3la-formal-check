@@ -36,9 +36,11 @@
 
 namespace ilang {
 
-class IsCheckerFlexRelay : public IsChecker {
+template <class Generator>
+class IsCheckerFlexRelay : public IsChecker<Generator> {
 public:
-  IsCheckerFlexRelay() : IsChecker(flex::GetFlexIla(), relay::GetRelayIla()) {}
+  IsCheckerFlexRelay(SmtShim<Generator>& gen)
+      : IsChecker<Generator>(flex::GetFlexIla(), relay::GetRelayIla(), gen) {}
 
   void SetFlexCmd(const fs::path& cmd_file);
   void SetRelayCmd(const fs::path& cmd_file);
@@ -47,9 +49,11 @@ public:
 protected:
   void AddEnvM0();
   void AddEnvM1();
-  z3::expr GetMiter();
-  z3::expr GetUninterpFunc();
+  typename IsChecker<Generator>::SmtExpr GetMiter();
+  typename IsChecker<Generator>::SmtExpr GetUninterpFunc();
+#ifdef USE_Z3
   void Debug(z3::model& model);
+#endif
 
 private:
   typedef std::map<std::string, unsigned long long> CmdType;

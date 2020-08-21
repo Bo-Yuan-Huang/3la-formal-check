@@ -27,6 +27,8 @@
 #include <fstream>
 #include <set>
 
+#include <ilang/target-smt/smt_switch_itf.h>
+#include <ilang/target-smt/z3_expr_adapter.h>
 #include <ilang/util/log.h>
 #include <ilang/util/str_util.h>
 #include <nlohmann/json.hpp>
@@ -39,7 +41,14 @@ using json = nlohmann::json;
 
 namespace ilang {
 
-const std::vector<std::string> IsCheckerFlexRelay::k_flex_in_data = {
+#ifdef USE_Z3
+template class IsCheckerFlexRelay<Z3ExprAdapter>;
+#else
+template class IsCheckerFlexRelay<SmtSwitchItf>;
+#endif
+
+template <class Generator>
+const std::vector<std::string> IsCheckerFlexRelay<Generator>::k_flex_in_data = {
     TOP_DATA_IN_0,  //
     TOP_DATA_IN_1,  //
     TOP_DATA_IN_2,  //
@@ -58,7 +67,8 @@ const std::vector<std::string> IsCheckerFlexRelay::k_flex_in_data = {
     TOP_DATA_IN_15  //
 };
 
-void IsCheckerFlexRelay::SetFlexCmd(const fs::path& cmd_file) {
+template <class Generator>
+void IsCheckerFlexRelay<Generator>::SetFlexCmd(const fs::path& cmd_file) {
   ILA_ASSERT(fs::is_regular_file(cmd_file)) << cmd_file;
   ILA_WARN_IF(!cmd_seq_flex_.empty()) << "Flex command not empty";
 
@@ -97,23 +107,23 @@ void IsCheckerFlexRelay::SetFlexCmd(const fs::path& cmd_file) {
   }
 }
 
-void IsCheckerFlexRelay::AddEnvM0() {
+template <class Generator> void IsCheckerFlexRelay<Generator>::AddEnvM0() {
   ILA_INFO << "Adding flex specific constraints";
   ILA_ASSERT(!cmd_seq_flex_.empty()) << "No Flex command provided";
-  ILA_ASSERT(instr_seq_m0_.size() >= cmd_seq_flex_.size());
+  ILA_ASSERT(this->instr_seq_m0_.size() >= cmd_seq_flex_.size());
 
   // constraint input of top-level instr.
-  for (auto i = 0, j = 0; i < instr_seq_m0_.size(); i++) {
-    auto instr = instr_seq_m0_.at(i);
+  for (auto i = 0, j = 0; i < this->instr_seq_m0_.size(); i++) {
+    auto instr = this->instr_seq_m0_.at(i);
 
     // only apply to top-level instr
-    if (top_instr_m0_.find(instr.name()) == top_instr_m0_.end()) {
+    if (this->top_instr_m0_.find(instr.name()) == this->top_instr_m0_.end()) {
       continue;
     }
 
     // only constrain on non-data parts
     auto data_free_cmd = FilterFlexCmd(instr.name(), j);
-    unroller_m0_->AddStepPred(i, data_free_cmd);
+    this->unroller_m0_->AssertStep(data_free_cmd.get(), i);
 
     // increment cmd ptr
     j++;
@@ -124,30 +134,33 @@ static const std::set<std::string> k_data_setup_instr = {
     "GB_CORE_STORE_LARGE" //
 };
 
-ExprRef IsCheckerFlexRelay::FilterFlexCmd(const std::string& instr_name,
-                                          size_t cmd_idx) {
+template <class Generator>
+ExprRef
+IsCheckerFlexRelay<Generator>::FilterFlexCmd(const std::string& instr_name,
+                                             size_t cmd_idx) {
   auto& cmd = cmd_seq_flex_[cmd_idx];
+  auto& m = this->m0_;
 
   // read/write
-  auto in_axi_wr = m0_.input(TOP_IF_WR);
-  auto in_axi_rd = m0_.input(TOP_IF_RD);
+  auto in_axi_wr = m.input(TOP_IF_WR);
+  auto in_axi_rd = m.input(TOP_IF_RD);
   auto cmd_expr =
       (in_axi_wr == cmd.at("is_wr")) & (in_axi_rd == cmd.at("is_rd"));
 
   // address
   auto addr_val = cmd.at("addr");
-  auto in_axi_addr = m0_.input(TOP_ADDR_IN);
+  auto in_axi_addr = m.input(TOP_ADDR_IN);
   cmd_expr = cmd_expr & (in_axi_addr == addr_val);
 
   // data setup instr
   if (k_data_setup_instr.find(instr_name) != k_data_setup_instr.end()) {
     store_flex_.insert({addr_val, cmd_idx});
-    // return cmd_expr;
+    return cmd_expr;
   }
 
   // data
   for (auto& data_port : k_flex_in_data) {
-    auto data_inp = m0_.input(data_port);
+    auto data_inp = m.input(data_port);
     auto data_val = cmd.at(data_port);
     cmd_expr = cmd_expr & (data_inp == data_val);
   }
