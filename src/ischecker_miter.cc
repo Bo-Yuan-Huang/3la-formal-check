@@ -188,9 +188,11 @@ IsCheckerFlexRelay<Generator>::GetUninterpFunc() {
   auto a = ctx.bv_const("a", TOP_DATA_IN_WIDTH);
   auto b = ctx.bv_const("b", TOP_DATA_IN_WIDTH);
 
-  interp = interp && //
-           z3::forall(a, b, flex_func_max(a, b) == relay_func_max(a, b)) &&
-           z3::forall(a, b, flex_func_max(a, b) == relay_func_max(b, a)) &&
+  interp =
+      interp && z3::forall(a, b, flex_func_max(a, b) == relay_func_max(a, b));
+  interp =
+      interp && z3::forall(a, b, flex_func_max(a, b) == relay_func_max(b, a));
+  interp = interp &&
            z3::forall(a, b,
                       (flex_func_max(a, b) == a) || (flex_func_max(a, b) == b));
 
